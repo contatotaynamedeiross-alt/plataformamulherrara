@@ -1,0 +1,34 @@
+# Segredos — nunca vão para o Git
+.env
+.env.*
+!.env.example
+*.env
+supabase/.env
+
+# Supabase local state
+supabase/.temp/
+supabase/functions/.deploy/
+
+# Deno
+.deno/
+
+# Node
+node_modules/
+dist/
+.next/
+
+# Lovable / Vite build
+src/.lovable/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+
+# Docker
+docker-compose.override.yml

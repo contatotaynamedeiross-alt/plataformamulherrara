@@ -1,0 +1,42 @@
+# Configuração do projeto Supabase
+# Docs: https://supabase.com/docs/reference/cli/config
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "private"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = []
+jwt_expiry = 3600
+enable_signup = false        # Acesso apenas por convite
+enable_anonymous_sign_ins = false
+email.enable_signup = false
+email.enable_confirmations = true
+# Magic link (sem senha)
+email.otp_length = 6
+email.otp_expiry = 3600
+
+[functions]
+# As funções usam Deno; variáveis de ambiente via "supabase secrets set"
+verify_jwt = true
