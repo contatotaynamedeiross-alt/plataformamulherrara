@@ -1,159 +1,78 @@
-/**
- * greenn-webhook — Recebe notificações de pagamento da Greenn
- *
- * Segurança:
- *   - Valida token secreto no header X-Greenn-Token
- *   - Idempotente: eventos já processados são ignorados
- *   - Aceita somente o produto configurado (GREENN_PRODUCT_ID)
- *   - CPF, endereço e telefone são descartados antes de salvar
- *   - Deploy: supabase functions deploy greenn-webhook --no-verify-jwt
- */
+// Webhook da Greenn → assinatura da Rara IA.
+//
+// Segurança (a Greenn não assina os webhooks):
+//  - URL com token secreto longo (?token=...), comparado em tempo constante;
+//  - só produtos da lista GREENN_PRODUCT_IDS liberam acesso;
+//  - corpo limitado a 64 KB; só POST com JSON;
+//  - idempotência e eventos fora de ordem tratados no banco;
+//  - nada de CPF/endereço/telefone é salvo; logs sem e-mail.
+// Deploy: supabase functions deploy greenn-webhook --no-verify-jwt
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+import { idempotencyKey, parseGreennPayload, redactGreennPayload, timingSafeEqual } from "../_shared/greenn.ts";
+import { env, json, log, readLimited } from "../_shared/http.ts";
 
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+const MAX_BODY = 64 * 1024;
 
-const REQUIRED_PRODUCT_ID = Deno.env.get("GREENN_PRODUCT_ID") ?? "";
-const WEBHOOK_TOKEN       = Deno.env.get("GREENN_WEBHOOK_TOKEN") ?? "";
-const SUPABASE_URL        = Deno.env.get("SUPABASE_URL") ?? "";
-const SERVICE_ROLE_KEY    = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return json(405, { error: "metodo_nao_permitido" });
 
-// Status Greenn → status interno
-const STATUS_MAP: Record<string, string> = {
-  approved:    "active",
-  trialing:    "trial",
-  cancelled:   "cancelled",
-  refunded:    "cancelled",
-  chargeback:  "cancelled",
-  expired:     "expired",
-};
-
-serve(async (req) => {
-  // 1. Só aceita POST
-  if (req.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405 });
+  const token = new URL(req.url).searchParams.get("token") ?? "";
+  const expected = env("GREENN_WEBHOOK_TOKEN");
+  if (expected.length < 32 || !timingSafeEqual(token, expected)) {
+    log("greenn.unauthorized");
+    return json(401, { error: "nao_autorizado" });
   }
 
-  // 2. Valida token secreto
-  const incomingToken = req.headers.get("x-greenn-token") ?? "";
-  if (!WEBHOOK_TOKEN || incomingToken !== WEBHOOK_TOKEN) {
-    console.error("[webhook] token inválido");
-    return new Response("Unauthorized", { status: 401 });
-  }
+  const raw = await readLimited(req, MAX_BODY);
+  if (raw === null) return json(413, { error: "payload_grande_demais" });
 
-  // 3. Parse do body
-  let payload: Record<string, unknown>;
+  let body: unknown;
   try {
-    payload = await req.json();
+    body = JSON.parse(raw);
   } catch {
-    return new Response("Bad Request", { status: 400 });
+    return json(400, { error: "json_invalido" });
   }
 
-  const eventId   = String(payload.id ?? "");
-  const productId = String((payload.product as Record<string,unknown>)?.id ?? "");
-  const status    = String(payload.status ?? "");
-  const email     = String((payload.customer as Record<string,unknown>)?.email ?? "").toLowerCase().trim();
-  const name      = String((payload.customer as Record<string,unknown>)?.name ?? "").trim();
-  const orderId   = String(payload.order_id ?? eventId);
-
-  // 4. Valida produto
-  if (REQUIRED_PRODUCT_ID && productId !== REQUIRED_PRODUCT_ID) {
-    console.warn(`[webhook] produto ignorado: ${productId}`);
-    return new Response("OK", { status: 200 }); // Retorna 200 para a Greenn não retentar
+  const event = parseGreennPayload(body);
+  if (!event) {
+    log("greenn.ignored_shape");
+    return json(200, { ok: true, outcome: "ignorado" });
   }
 
-  // 5. Valida dados mínimos
-  if (!email || !orderId || !status) {
-    console.error("[webhook] payload incompleto", { email: !!email, orderId: !!orderId, status });
-    return new Response("Bad Request", { status: 400 });
+  const allowedProducts = env("GREENN_PRODUCT_IDS").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!event.productId || !allowedProducts.includes(event.productId)) {
+    log("greenn.ignored_product", { product: event.productId });
+    return json(200, { ok: true, outcome: "produto_ignorado" });
   }
 
-  const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
+  const admin = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
+    auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // 6. Idempotência: já processou este evento?
-  const { data: existing } = await supabase
-    .from("private.processed_events")
-    .select("event_id")
-    .eq("event_id", eventId)
-    .single();
+  const { data, error } = await admin.rpc("apply_greenn_event", {
+    p_idempotency_key: await idempotencyKey(event),
+    p_event_type: event.eventType,
+    p_provider_status: event.providerStatus,
+    p_provider_ref: event.providerRef,
+    p_email: event.email,
+    p_period_end: event.periodEnd,
+    p_provider_updated_at: event.providerUpdatedAt,
+    p_payload_redacted: redactGreennPayload(body),
+  });
 
-  if (existing) {
-    console.info(`[webhook] evento ${eventId} já processado`);
-    return new Response("OK", { status: 200 });
+  if (error) {
+    // 500 faz a Greenn reenviar; a idempotência garante que não duplica.
+    log("greenn.db_error", { ref: event.providerRef, code: error.code });
+    return json(500, { error: "erro_interno" });
   }
 
-  // 7. Mapeia status
-  const internalStatus = STATUS_MAP[status];
-  if (!internalStatus) {
-    console.warn(`[webhook] status desconhecido: ${status}`);
-    return new Response("OK", { status: 200 });
+  if (data?.needs_invite) {
+    const { error: inviteError } = await admin.auth.admin.inviteUserByEmail(event.email, {
+      redirectTo: env("APP_URL"),
+    });
+    if (inviteError) log("greenn.invite_error", { ref: event.providerRef, status: inviteError.status });
   }
 
-  // 8. Fluxo principal
-  try {
-    // 8a. Busca ou cria usuário na auth
-    let userId: string;
-
-    const { data: existingUser } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("email", email)
-      .single();
-
-    if (existingUser) {
-      userId = existingUser.id;
-    } else {
-      // Cria usuário sem senha (magic link)
-      const { data: newUser, error: createErr } = await supabase.auth.admin.createUser({
-        email,
-        email_confirm: false,
-        user_metadata: { full_name: name },
-      });
-      if (createErr || !newUser.user) throw createErr ?? new Error("Falha ao criar usuário");
-
-      userId = newUser.user.id;
-
-      // Cria perfil (dados mínimos — sem CPF, endereço, telefone)
-      await supabase.from("profiles").insert({ id: userId, full_name: name, email });
-
-      // Gera convite por e-mail
-      const { error: inviteErr } = await supabase.auth.admin.inviteUserByEmail(email, {
-        redirectTo: `${Deno.env.get("SITE_URL") ?? ""}/boas-vindas`,
-      });
-      if (inviteErr) console.error("[webhook] erro ao enviar convite:", inviteErr.message);
-    }
-
-    // 8b. Upsert assinatura
-    const trialEndsAt =
-      internalStatus === "trial"
-        ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-        : null;
-
-    await supabase.from("subscriptions").upsert(
-      {
-        user_id:            userId,
-        greenn_order_id:    orderId,
-        greenn_product_id:  productId,
-        status:             internalStatus,
-        trial_ends_at:      trialEndsAt,
-        current_period_end: trialEndsAt,
-      },
-      { onConflict: "greenn_order_id" }
-    );
-
-    // 8c. Marca evento como processado
-    await supabase
-      .from("private.processed_events")
-      .insert({ event_id: eventId });
-
-    console.info(`[webhook] ok — user=${userId} status=${internalStatus}`);
-    return new Response("OK", { status: 200 });
-
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[webhook] erro:", msg);
-    // Retorna 500 para a Greenn retentar
-    return new Response("Internal Server Error", { status: 500 });
-  }
+  log("greenn.processed", { ref: event.providerRef, outcome: data?.outcome, status: data?.status });
+  return json(200, { ok: true, outcome: data?.outcome ?? "desconhecido" });
 });
