@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data, error } = await admin.rpc("apply_greenn_event", {
+  const { data, error } = await admin.rpc("apply_payment_event", {
     p_idempotency_key: await idempotencyKey(event),
     p_event_type: event.eventType,
     p_provider_status: event.providerStatus,
