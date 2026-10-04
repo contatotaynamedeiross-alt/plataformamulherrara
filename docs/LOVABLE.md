@@ -75,7 +75,7 @@ await supabase.functions.invoke("account-delete", { body: { confirm: "EXCLUIR" }
 
 ## Telas da Sprint 2 (base: protótipo da Trilha 1)
 
-1. Login por link mágico e tela "acesso inativo" (quando `has_access` for falso), com link para a Greenn.
+1. Login por link mágico e tela "acesso inativo" (quando `has_access` for falso), com link para a página de assinatura na Asaas.
 2. Boas-vindas com consentimentos de termos e privacidade.
 3. Mapa em 3 passos (grava em `profiles`).
 4. Consentimento de dados sensíveis, depois Diagnóstico Raro (12 afirmações).

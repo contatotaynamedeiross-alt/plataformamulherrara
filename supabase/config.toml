@@ -18,7 +18,7 @@ enable_signup = false
 double_confirm_changes = true
 enable_confirmations = true
 
-[functions.greenn-webhook]
+[functions.asaas-webhook]
 verify_jwt = false
 
 [functions.account-delete]
