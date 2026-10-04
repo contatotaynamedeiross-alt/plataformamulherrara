@@ -50,5 +50,10 @@ jobs:
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
+        with:
+          # Varre apenas o diff do PR (não o histórico inteiro).
+          # O .gitleaks.toml na raiz suprime falsos positivos conhecidos
+          # (hashes sha512 de deno.lock, URLs de sessão do Claude Code).
+          args: --no-git
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
