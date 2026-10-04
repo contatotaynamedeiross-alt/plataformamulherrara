@@ -1,82 +1,65 @@
-# Rara IA — Mapa LGPD
+# LGPD · Mapa de dados e regras
 
-## Quem trata os dados
+Documento técnico de apoio. A política de privacidade e os termos de uso precisam ser escritos ou
+revisados por advogado antes do lançamento.
 
-**Controladora:** [Nome da empresa / Tayna Deiros]
-**DPO (Encarregado):** [Nomear antes do lançamento]
-**Operadora:** Supabase Inc. (infraestrutura), Greenn (pagamentos)
+## Mapa de dados
 
----
+| Dado | Finalidade | Base legal (LGPD) | Retenção |
+| --- | --- | --- | --- |
+| E-mail | Login e vínculo com a assinatura | Execução de contrato (art. 7º, V) | Enquanto a conta existir |
+| Nome, negócio, faturamento, meta, travas, tempo | Personalizar o plano | Execução de contrato (art. 7º, V) | Enquanto a conta existir |
+| Respostas do diagnóstico (inclui pergunta sobre fé) | Calcular o plano | **Consentimento específico** para dado sensível de convicção religiosa (art. 11, I) | Enquanto a conta existir ou até revogar |
+| Missões, entregas do dia, pontos | Acompanhar evolução | Execução de contrato | Enquanto a conta existir |
+| Status da assinatura | Liberar ou bloquear acesso | Execução de contrato | Anonimizado após exclusão; mantido por obrigação legal |
+| Eventos da Greenn (sem dados pessoais) | Auditoria e reprocessamento | Legítimo interesse (art. 7º, IX) | 180 dias |
+| Registro de auditoria (e-mail só em hash) | Segurança e prova de conformidade | Legítimo interesse / obrigação legal | 5 anos |
 
-## Dados coletados e por quê
+**Não coletamos:** CPF, endereço, telefone ou dados de cartão. A Greenn envia, mas o webhook descarta.
 
-| Dado            | Origem  | Finalidade                          | Base legal (LGPD)          | Armazenado? |
-|-----------------|---------|-------------------------------------|----------------------------|-------------|
-| Nome completo   | Greenn  | Personalizar experiência            | Contrato (art. 7, V)       | ✅ profiles |
-| E-mail          | Greenn  | Autenticação, comunicação           | Contrato (art. 7, V)       | ✅ profiles |
-| Status assinatura | Greenn | Controlar acesso à plataforma      | Contrato (art. 7, V)       | ✅ subscriptions |
-| ID do pedido    | Greenn  | Idempotência, suporte               | Contrato (art. 7, V)       | ✅ subscriptions |
-| CPF             | Greenn  | —                                   | —                          | ❌ descartado |
-| Endereço        | Greenn  | —                                   | —                          | ❌ descartado |
-| Telefone        | Greenn  | —                                   | —                          | ❌ descartado |
-| Respostas ao diagnóstico | App | Gerar plano personalizado     | Legítimo interesse + Consentimento | ✅ diagnostics |
-| **Crença/fé** (diagnóstico) | App | Personalizar plano | **Consentimento explícito (art. 11)** | ✅ só com consent_id |
-| Missões, pontos, medalhas | App | Engajamento | Contrato (art. 7, V)   | ✅ missions/points/medals |
-| Consentimentos  | App     | Registro legal                      | Obrigação legal (art. 7, II) | ✅ consents |
+## Consentimentos
 
----
+Registrados em `public.consents`, só acrescentando linhas (revogar = nova linha com `granted = false`).
 
-## Dado sensível: crença/fé
+| Finalidade (`purpose`) | Quando pedir | Obrigatório para |
+| --- | --- | --- |
+| `termos_uso` | Primeiro acesso | Usar o app |
+| `politica_privacidade` | Primeiro acesso | Usar o app |
+| `dados_sensiveis` | Antes do diagnóstico, com texto claro sobre a pergunta de fé | Salvar o diagnóstico (bloqueado no banco) |
+| `comunicacoes` | Opcional | E-mails de marketing |
 
-A pergunta sobre crença religiosa revela **convicção religiosa**, dado sensível pela LGPD (art. 5, II).
+Toda mudança de texto gera nova `document_version` e novo pedido de consentimento.
 
-**Tratamento:**
-1. Antes de exibir a pergunta, o front mostra aviso claro e pede consentimento explícito.
-2. Usuária clica "Aceito" → front chama RPC `record_consent('diagnostic_sensitive_v1', '1.0', true)`.
-3. Só então o diagnóstico é enviado com `contains_sensitive: true` e o `consent_id` retornado.
-4. Trigger no banco bloqueia INSERT com `contains_sensitive = true` e `consent_id = null`.
+## Direitos da titular (art. 18)
 
-**Revogar consentimento:** usuária chama `record_consent(..., false)`. Nova linha é inserida com `accepted = false`. Sistema não solicita mais o dado sensível.
+| Direito | Como atender |
+| --- | --- |
+| Acesso e portabilidade | `export_my_data()` (botão "Baixar meus dados") |
+| Correção | Edição do perfil no app |
+| Eliminação | Função `account-delete` (botão "Excluir minha conta") |
+| Revogar consentimento | Nova linha em `consents` com `granted = false` |
+| Informação sobre compartilhamento | Lista de operadores abaixo, na política de privacidade |
 
----
+## Operadores (quem processa dados em nome da Rara IA)
 
-## Direitos das titulares (art. 18)
+| Operador | Uso | Observação |
+| --- | --- | --- |
+| Supabase | Banco, login, funções | Projeto na região São Paulo; empresa estrangeira, prever cláusulas de transferência internacional na política |
+| Greenn | Pagamento | Controladora independente dos dados de pagamento |
+| Provedor de SMTP | E-mails de login | Escolher e listar na política |
+| Lovable / hospedagem do front | Entrega das telas | Não armazena dados das usuárias |
+| Provedor de IA (Sprint 4) | Mentoras | Exigir contrato sem uso dos dados para treino |
 
-| Direito                        | Como exercer na plataforma |
-|--------------------------------|----------------------------|
-| Confirmação de tratamento      | Seção "Meus dados" no app  |
-| Acesso aos dados               | Botão "Baixar meus dados" → RPC `export_my_data()` |
-| Correção                       | Editar perfil no app       |
-| Anonimização / bloqueio        | [Implementar Sprint 2]     |
-| Eliminação                     | Botão "Excluir conta" → Edge Function `account-delete` |
-| Portabilidade                  | Arquivo JSON gerado por `export_my_data()` |
-| Revogação de consentimento     | Seção "Consentimentos" no app |
-| Informação sobre compartilhamento | Política de privacidade |
-| Revisão de decisão automatizada | [Implementar Sprint 3]    |
+## Antes do lançamento
 
----
+- [ ] Política de privacidade e termos revisados por advogado
+- [ ] Encarregado de dados (DPO) nomeado, com contato publicado
+- [ ] Texto do consentimento de dados sensíveis aprovado
+- [ ] `pg_cron` agendado para `private.purge_old_events()`
+- [ ] Plano de incidente com responsáveis definidos
 
-## Retenção e descarte
+## Incidentes
 
-| Dado                | Retenção          | Descarte |
-|---------------------|-------------------|----------|
-| Perfil + assinatura | Enquanto conta ativa + 5 anos (obrigação contábil) | DELETE via account-delete |
-| Diagnósticos        | 2 anos            | [Job de purge — Sprint 2] |
-| Audit log           | 1 ano             | [Job de purge — Sprint 2] |
-| processed_events    | 30 dias           | `private.purge_old_events()` via pg_cron |
-
----
-
-## Transferência internacional
-
-- **Supabase (AWS São Paulo — sa-east-1):** dados processados no Brasil.
-- **Greenn:** empresa brasileira; dados de pagamento ficam na Greenn.
-
----
-
-## Ações antes do lançamento
-
-- [ ] Contratar advogado para revisar política de privacidade e termos de uso
-- [ ] Nomear DPO e publicar contato no site
-- [ ] Registrar na ANPD (quando obrigatório para o porte da empresa)
-- [ ] Revisar este mapa após qualquer nova coleta de dados
+Incidente com risco ou dano relevante às titulares deve ser comunicado à ANPD e às titulares
+afetadas no prazo do regulamento da ANPD (Resolução CD/ANPD nº 15/2024: 3 dias úteis a partir do
+conhecimento). Confirmar o prazo vigente com o jurídico.

@@ -1,42 +1,25 @@
-# Configuração do projeto Supabase
-# Docs: https://supabase.com/docs/reference/cli/config
+# Configuração para desenvolvimento local (supabase start).
+# Em produção, aplique as mesmas escolhas no painel do Supabase (ver README).
+project_id = "rara-ia"
 
 [api]
-enabled = true
-port = 54321
-schemas = ["public", "private"]
-extra_search_path = ["public", "extensions"]
+schemas = ["public"]
 max_rows = 1000
 
-[db]
-port = 54322
-shadow_port = 54320
-major_version = 15
-
-[studio]
-enabled = true
-port = 54323
-
-[inbucket]
-enabled = true
-port = 54324
-
-[storage]
-enabled = true
-
 [auth]
-enabled = true
-site_url = "http://localhost:3000"
-additional_redirect_urls = []
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173"]
 jwt_expiry = 3600
-enable_signup = false        # Acesso apenas por convite
-enable_anonymous_sign_ins = false
-email.enable_signup = false
-email.enable_confirmations = true
-# Magic link (sem senha)
-email.otp_length = 6
-email.otp_expiry = 3600
+enable_refresh_token_rotation = true
+enable_signup = false
 
-[functions]
-# As funções usam Deno; variáveis de ambiente via "supabase secrets set"
+[auth.email]
+enable_signup = false
+double_confirm_changes = true
+enable_confirmations = true
+
+[functions.greenn-webhook]
+verify_jwt = false
+
+[functions.account-delete]
 verify_jwt = true
