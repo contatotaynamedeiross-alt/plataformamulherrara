@@ -6,6 +6,7 @@
 supabase/.env
 
 # Supabase local state
+supabase/.branches
 supabase/.temp/
 supabase/functions/.deploy/
 

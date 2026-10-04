@@ -1,45 +1,48 @@
-/**
- * account-delete — Permite à usuária autenticada excluir a própria conta
- *
- * LGPD art. 18, VI: direito ao apagamento.
- * Chama a RPC delete_my_account() que remove dados em cascata.
- * Deploy: supabase functions deploy account-delete  (JWT obrigatório)
- */
+// Exclusão de conta pela própria titular (LGPD art. 18, VI).
+// Fluxo: valida o login → anonimiza assinatura → apaga o usuário (cascata apaga o resto).
+// Corpo exigido: {"confirm": "EXCLUIR"} para evitar exclusão acidental.
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+import { corsHeaders, env, json, log, readLimited } from "../_shared/http.ts";
 
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const SUPABASE_URL     = Deno.env.get("SUPABASE_URL") ?? "";
-const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-
-serve(async (req) => {
-  if (req.method !== "DELETE" && req.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405 });
-  }
+Deno.serve(async (req) => {
+  const cors = corsHeaders(req.headers.get("origin"));
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  if (req.method !== "POST") return json(405, { error: "metodo_nao_permitido" }, cors);
 
   const authHeader = req.headers.get("authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+  const jwt = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  if (!jwt) return json(401, { error: "nao_autenticada" }, cors);
 
-  const supabase = createClient(SUPABASE_URL, ANON_KEY, {
-    global: { headers: { authorization: authHeader } },
-    auth: { persistSession: false },
+  const raw = await readLimited(req, 1024);
+  let confirm = "";
+  try {
+    confirm = raw ? String(JSON.parse(raw)?.confirm ?? "") : "";
+  } catch { /* corpo inválido = sem confirmação */ }
+  if (confirm !== "EXCLUIR") return json(400, { error: "confirmacao_necessaria" }, cors);
+
+  const admin = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
+    auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return new Response("Unauthorized", { status: 401 });
+  const { data: userData, error: userError } = await admin.auth.getUser(jwt);
+  const user = userData?.user;
+  if (userError || !user) return json(401, { error: "nao_autenticada" }, cors);
+
+  const { error: prepError } = await admin.rpc("prepare_account_deletion", { p_user: user.id });
+  if (prepError) {
+    log("account_delete.prepare_error", { code: prepError.code });
+    return json(500, { error: "erro_interno" }, cors);
   }
 
-  const { error } = await supabase.rpc("delete_my_account");
-  if (error) {
-    console.error("[account-delete] erro:", error.message);
-    return new Response("Internal Server Error", { status: 500 });
+  const { error: delError } = await admin.auth.admin.deleteUser(user.id);
+  if (delError) {
+    log("account_delete.delete_error", { status: delError.status });
+    return json(500, { error: "erro_interno" }, cors);
   }
 
-  return new Response(JSON.stringify({ deleted: true }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
+  log("account_delete.done");
+  return json(200, {
+    ok: true,
+    aviso: "Seus dados foram excluídos. Se a assinatura ainda estiver ativa, cancele também na Greenn.",
+  }, cors);
 });

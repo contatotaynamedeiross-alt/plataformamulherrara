@@ -1,112 +1,62 @@
-# Rara IA — Arquitetura
+# Arquitetura
 
 ## Visão geral
 
-```
-Usuária (browser)
-    │
-    ▼
-Lovable (front-end)
-    │  JWT (magic link)
-    ▼
-Supabase
-    ├── Auth         → magic link, sem senha, cadastro fechado
-    ├── PostgREST    → API gerada automaticamente com RLS
-    ├── Edge Functions:
-    │     greenn-webhook   → recebe pagamentos, cria contas
-    │     save-diagnostic  → salva diagnóstico com check LGPD
-    │     account-delete   → exclui conta (LGPD)
-    └── Storage      → (futuro: uploads de usuária)
-
-Greenn (pagamentos)
-    └── POST /functions/v1/greenn-webhook
+```mermaid
+flowchart LR
+  C[Compradora] -->|paga R$ 1| G[Greenn]
+  G -->|webhook com token| W[Edge Function\ngreenn-webhook]
+  W -->|apply_greenn_event\nservice_role| DB[(Postgres\nSupabase SP)]
+  W -->|convite por e-mail| A[Supabase Auth]
+  A -->|link mágico| U[Usuária no app\nLovable]
+  U -->|JWT da usuária\nsupabase-js| API[PostgREST]
+  API -->|RLS + RPCs| DB
+  U -->|excluir conta| D[Edge Function\naccount-delete]
+  D --> DB
+  D --> A
 ```
 
----
+## Decisões
 
-## Fluxo de compra → acesso
+| Decisão | Motivo |
+| --- | --- |
+| Supabase em São Paulo | Dados no Brasil, Postgres padrão de mercado, login pronto, sem servidor para manter |
+| Regras de negócio em SQL (RPC) | Ficam perto dos dados, são testadas num Postgres real e valem para qualquer tela futura (app, web, IA) |
+| RLS em todas as tabelas, sem exceção | O navegador é território hostil: mesmo com bug na tela, uma usuária não lê dados de outra |
+| Escritas sensíveis só por RPC `SECURITY DEFINER` | Pontos, assinatura e diagnóstico não podem ser forjados pelo navegador |
+| Cadastro fechado, entrada por convite | Só entra quem pagou; reduz contas falsas e abuso |
+| Webhook idempotente e ordenado | A Greenn pode reenviar ou mandar fora de ordem; o banco decide o que vale |
+| Conteúdo do método em tabelas | Novas trilhas e as 12 áreas entram por migração, sem mexer em código de tela |
 
-```
-1. Usuária compra na Greenn (R$ 1 no 1º mês, depois R$ 97)
-2. Greenn dispara POST para /functions/v1/greenn-webhook
-3. Webhook valida token secreto (X-Greenn-Token)
-4. Webhook descarta CPF/endereço/telefone; guarda só nome + e-mail + status
-5. Cria conta na auth.users (sem senha)
-6. Cria perfil em public.profiles
-7. Upsert em public.subscriptions
-8. Supabase envia magic link de boas-vindas por e-mail
-9. Usuária clica no link → entra na plataforma
-```
+## Modelo de dados
 
----
+| Tabela | Conteúdo | Quem escreve |
+| --- | --- | --- |
+| `profiles` | Nome, negócio, mapa (faturamento, meta, travas, tempo) | Usuária (colunas liberadas) |
+| `consents` | Histórico de consentimentos com versão do documento | Usuária (só acrescenta) |
+| `subscriptions` | Status da assinatura vindo da Greenn | Só o webhook |
+| `diagnostic_results` | Respostas, notas, foco e força | Só `submit_diagnostic` |
+| `task_completions` | Missões concluídas por plano | Só `set_task_completion` |
+| `daily_offering_log` | Dias com entrega do dia | Só `mark_daily_offering` |
+| `stages`, `diagnostic_questions`, `plan_tasks`, `archetypes`, `daily_offerings`, `levels` | Conteúdo do método | Só migrações |
+| `private.provider_events` | Eventos da Greenn sem dados pessoais | Só o webhook |
+| `private.audit_log` | Ações sensíveis | Só funções do servidor |
 
-## Tabelas e quem pode escrever
+## Funções chamadas pelo app (RPC)
 
-| Tabela                      | Cliente lê? | Cliente escreve? | Quem escreve |
-|-----------------------------|-------------|------------------|--------------|
-| profiles                    | ✅ próprio  | nome/email ✅    | usuária (UPDATE) |
-| subscriptions               | ✅ própria  | ❌               | webhook (service_role) |
-| invites                     | ❌          | ❌               | webhook (service_role) |
-| consents                    | ✅ próprios | via RPC ✅       | RPC record_consent |
-| diagnostics                 | ✅ próprios | via função ✅    | Edge Function save-diagnostic |
-| plans                       | ✅ próprios | ❌               | servidor (futuro) |
-| missions                    | ✅ próprias | status ✅        | usuária (UPDATE limitado) |
-| points                      | ✅ próprios | ❌               | RPC grant_points (service_role) |
-| medals                      | ✅ próprias | ❌               | servidor (service_role) |
-| private.audit_log           | ❌          | ❌               | private.log_audit() |
-| private.processed_events    | ❌          | ❌               | webhook (service_role) |
+| Função | O que faz |
+| --- | --- |
+| `submit_diagnostic(answers smallint[12])` | Exige assinatura e consentimento `dados_sensiveis`; calcula notas, foco e força |
+| `set_task_completion(task_id, done)` | Marca ou desmarca missão do plano atual |
+| `mark_daily_offering()` | Registra a entrega do dia (uma por dia, horário de Brasília) |
+| `get_my_progress()` | Pontos, título, sequência, plano atual e se o acesso está ativo |
+| `export_my_data()` | Exporta todos os dados da titular (LGPD) |
+| `admin_subscription_summary()` | Totais por status (só admin) |
 
----
+## Como crescer sem jogar fora
 
-## Segredos necessários (supabase secrets set)
-
-| Variável                   | Descrição |
-|----------------------------|-----------|
-| `GREENN_WEBHOOK_TOKEN`     | Token secreto para validar chamadas da Greenn (64 hex chars) |
-| `GREENN_PRODUCT_ID`        | ID do produto Rara IA na Greenn |
-| `SITE_URL`                 | URL do front (ex: https://rara.lovable.app) |
-| `SUPABASE_URL`             | Gerado automaticamente pelo Supabase |
-| `SUPABASE_ANON_KEY`        | Gerado automaticamente pelo Supabase |
-| `SUPABASE_SERVICE_ROLE_KEY`| Gerado automaticamente — **nunca para o front** |
-
----
-
-## Checklist de produção
-
-Antes do primeiro lançamento:
-
-### Auth
-- [ ] `enable_signup = false` (Supabase Dashboard → Auth → Settings)
-- [ ] Magic link habilitado
-- [ ] URLs autorizadas: `https://seudominio.com.br/**`
-- [ ] SMTP próprio configurado (Dashboard → Auth → SMTP Settings)
-- [ ] JWT expiry: 3600s
-
-### Banco
-- [ ] `supabase db push` rodado (após "ok" da responsável)
-- [ ] Backups automáticos: Dashboard → Database → Backups → Enable PITR
-- [ ] `pg_cron` habilitado: Dashboard → Database → Extensions → pg_cron
-- [ ] Job pg_cron criado:
-  ```sql
-  select cron.schedule(
-    'purge-old-events',
-    '0 3 * * *',  -- todo dia às 3h
-    'select private.purge_old_events()'
-  );
-  ```
-
-### Funções
-- [ ] Segredos cadastrados: `supabase secrets set ...`
-- [ ] Deploy: `supabase functions deploy greenn-webhook --no-verify-jwt`
-- [ ] Deploy: `supabase functions deploy save-diagnostic`
-- [ ] Deploy: `supabase functions deploy account-delete`
-
-### Greenn
-- [ ] URL do webhook cadastrada no painel Greenn
-- [ ] Header `X-Greenn-Token` configurado com o valor do segredo
-
-### Segurança
-- [ ] Security Advisor sem alertas vermelhos (Dashboard → Security Advisor)
-- [ ] Política de privacidade publicada
-- [ ] Termos de uso publicados
-- [ ] DPO nomeado
+- **Mentoras de IA (Sprint 4):** nova edge function que chama o modelo de IA com a chave no servidor,
+  limite de uso por usuária em tabela própria e checagem de `has_active_access`.
+- **Comunidade (Sprint 6):** Supabase Realtime com RLS por sala, tabela de denúncias e bloqueio.
+- **Vitrine (Sprint 7):** tabelas de ofertas e vouchers com resgate por RPC (um por usuária).
+- **Escala:** índices já cobrem as consultas por usuária; o Supabase escala o Postgres por plano.
