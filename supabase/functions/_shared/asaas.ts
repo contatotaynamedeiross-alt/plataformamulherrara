@@ -90,7 +90,7 @@ export function parseAsaasPayload(body: unknown): ParsedAsaasEvent | null {
       null;
     if (!email) return null;
 
-    const periodEnd = toIso(sub.nextDueDate);
+    const periodEnd = addDays(toIso(sub.nextDueDate), 7);
     return {
       eventType,
       providerStatus: str(sub.status, 40) ?? eventType,
