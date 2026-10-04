@@ -1,0 +1,24 @@
+# Configuração do gitleaks para evitar falsos positivos.
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+
+title = "Rara IA — gitleaks config"
+
+[extend]
+# Herda as regras padrão do gitleaks
+useDefault = true
+
+[allowlist]
+description = "Falsos positivos conhecidos"
+paths = [
+  # Hashes de integridade em arquivos de lock não são segredos
+  "deno.lock",
+  "package-lock.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+]
+regexes = [
+  # sha512 de pacotes npm/deno (integrity checks)
+  '''sha512-[A-Za-z0-9+/=]{80,}''',
+  # URLs de sessão do Claude Code na atribuição de commits
+  '''claude\.ai/code/session_[A-Za-z0-9]+''',
+]
