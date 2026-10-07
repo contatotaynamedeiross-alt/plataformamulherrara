@@ -60,8 +60,8 @@ export default function Diagnostico() {
     setSalvando(true);
     setErro("");
     const pRespostas = perguntas.map((p) => respostas[p.id]);
-    const { data, error } = await supabase.rpc("salvar_diagnostico", {
-      p_respostas: pRespostas,
+    const { data, error } = await supabase.rpc("submit_diagnostic", {
+      answers: pRespostas,
     });
     setSalvando(false);
     if (error) {

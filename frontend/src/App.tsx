@@ -47,9 +47,19 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-    supabase.functions
-      .invoke("verificar-acesso")
-      .then(({ data }) => setAcesso(data as AcessoInfo))
+    supabase.rpc("get_my_progress")
+      .then(({ data }) => {
+        if (data) {
+          setAcesso({
+            tem_acesso: !!data.has_access,
+            plano: data.plan ?? null,
+            status: data.has_access ? "ativo" : "cancelado",
+            data_fim: null,
+          });
+        } else {
+          setAcesso({ tem_acesso: false, plano: null, status: null, data_fim: null });
+        }
+      })
       .catch(() => setAcesso({ tem_acesso: false, plano: null, status: null, data_fim: null }));
   }, [user]);
 
