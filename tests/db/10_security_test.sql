@@ -410,6 +410,52 @@ do $$ begin
 end $$;
 reset role;
 
+-- ---------------------------------------------------------------------
+-- Sprint 3 · Assinantes: isolamento e restrições
+-- ---------------------------------------------------------------------
+
+-- Anon não lê assinantes
+set role anon;
+do $$ begin
+  perform 1 from public.assinantes;
+  raise exception 'FALHA: anonimo leu assinantes';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Autenticada não pode inserir diretamente
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  insert into public.assinantes (user_id, plano, status)
+  values ('00000000-0000-0000-0000-00000000000b', 'mensal', 'ativo');
+  raise exception 'FALHA: autenticada inseriu em assinantes diretamente';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- service_role insere e isolamento entre usuárias funciona
+set role service_role;
+insert into public.assinantes (user_id, plano, status)
+values ('00000000-0000-0000-0000-00000000000b', 'mensal', 'ativo');
+reset role;
+
+-- Bia vê apenas a própria assinatura
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  assert (select count(*) from public.assinantes) = 1, 'bia deve ver 1 assinatura propria';
+end $$;
+reset role;
+
+-- Admin (sem assinatura cadastrada) não vê linha da Bia
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000c","role":"authenticated","app_metadata":{"role":"admin"}}', false);
+do $$ begin
+  assert (select count(*) from public.assinantes) = 0, 'FALHA: admin viu assinatura de outra usuaria';
+end $$;
+reset role;
+
 -- Nenhuma tabela do schema public sem RLS
 do $$
 declare t text;
