@@ -16,6 +16,10 @@ export interface ParsedAsaasEvent {
   providerStatus: string;
   providerRef: string;
   email: string;
+  /** user_id do Supabase definido como externalReference no cliente Asaas. */
+  externalReference: string | null;
+  /** Ciclo da assinatura Asaas: MONTHLY, QUARTERLY, YEARLY, etc. */
+  billingCycle: string | null;
   subscriptionId: string | null;
   periodEnd: string | null;
   providerUpdatedAt: string | null;
@@ -90,12 +94,16 @@ export function parseAsaasPayload(body: unknown): ParsedAsaasEvent | null {
       null;
     if (!email) return null;
 
+    const externalReference = str(sub.externalReference, 64);
+    const billingCycle = str(sub.cycle, 40);
     const periodEnd = addDays(toIso(sub.nextDueDate), 7);
     return {
       eventType,
       providerStatus: str(sub.status, 40) ?? eventType,
       providerRef: `subscription:${ref}`,
       email,
+      externalReference,
+      billingCycle,
       subscriptionId: ref,
       periodEnd,
       providerUpdatedAt: toIso(sub.dateUpdated) ?? toIso(sub.dateCreated),
@@ -114,17 +122,17 @@ export function parseAsaasPayload(body: unknown): ParsedAsaasEvent | null {
     null;
   if (!email) return null;
 
+  // externalReference: set when creating payment/customer in Asaas (should be user_id)
+  const externalReference = str(payment.externalReference, 64);
+
   const subscriptionId = str(payment.subscription, 64);
+  // billingCycle may be embedded in payment.subscription object when expanded
+  const billingCycle = str(obj(payment.subscriptionObject).cycle, 40) ?? null;
   const dueDateIso = toIso(payment.dueDate);
   const confirmedDateIso = toIso(payment.confirmedDate);
 
-  // Status mapping to internal
   let periodEnd: string | null;
-  if (
-    eventType === "PAYMENT_CONFIRMED" ||
-    eventType === "PAYMENT_RECEIVED"
-  ) {
-    // Grace period: dueDate + 7 days
+  if (eventType === "PAYMENT_CONFIRMED" || eventType === "PAYMENT_RECEIVED") {
     periodEnd = addDays(dueDateIso, 7);
   } else {
     periodEnd = dueDateIso;
@@ -137,6 +145,8 @@ export function parseAsaasPayload(body: unknown): ParsedAsaasEvent | null {
     providerStatus: str(payment.status, 40) ?? eventType,
     providerRef: `payment:${ref}`,
     email,
+    externalReference,
+    billingCycle,
     subscriptionId,
     periodEnd,
     providerUpdatedAt,
@@ -144,7 +154,7 @@ export function parseAsaasPayload(body: unknown): ParsedAsaasEvent | null {
 }
 
 /**
- * Mapeamento de evento Asaas → status interno.
+ * Mapeamento de evento Asaas → status interno (tabela subscriptions legada).
  */
 export function mapStatus(eventType: AsaasEventType): "active" | "cancelled" | "past_due" | null {
   switch (eventType) {
@@ -218,6 +228,44 @@ async function sha256Hex(text: string): Promise<string> {
 /** Chave derivada de providerRef + eventType para idempotência. */
 export function idempotencyKey(e: ParsedAsaasEvent): Promise<string> {
   return sha256Hex([e.providerRef, e.eventType].join("|"));
+}
+
+/**
+ * Mapeia o ciclo de cobrança da Asaas para o plano interno.
+ * Default: 'mensal' para qualquer valor não reconhecido.
+ */
+export function mapPlano(billingCycle: string | null): "mensal" | "trimestral" | "anual" {
+  switch (billingCycle?.toUpperCase()) {
+    case "QUARTERLY":
+      return "trimestral";
+    case "SEMIANNUAL":
+    case "YEARLY":
+      return "anual";
+    default:
+      return "mensal";
+  }
+}
+
+/**
+ * Mapeia o eventType ao status da tabela assinantes.
+ * Retorna null para eventos que não alteram o status (ex.: PAYMENT_REFUNDED).
+ */
+export function mapStatusAssinante(
+  eventType: AsaasEventType,
+): "ativo" | "suspenso" | "cancelado" | null {
+  switch (eventType) {
+    case "PAYMENT_CONFIRMED":
+    case "PAYMENT_RECEIVED":
+      return "ativo";
+    case "PAYMENT_OVERDUE":
+      return "suspenso";
+    case "PAYMENT_DELETED":
+    case "SUBSCRIPTION_DELETED":
+    case "SUBSCRIPTION_INACTIVATED":
+      return "cancelado";
+    default:
+      return null;
+  }
 }
 
 /** Comparação em tempo constante (evita descobrir o token por medição de tempo). */
