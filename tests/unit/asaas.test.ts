@@ -3,7 +3,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   idempotencyKey,
+  mapPlano,
   mapStatus,
+  mapStatusAssinante,
   parseAsaasPayload,
   redactAsaasPayload,
   timingSafeEqual,
@@ -20,6 +22,7 @@ const paymentConfirmed = {
     value: 97.0,
     billingType: "PIX",
     subscription: "sub_xyz789",
+    externalReference: "00000000-0000-0000-0000-000000000001",
     customerEmail: " Ana@Exemplo.com ",
     customer: { id: "cus_111", cpfCnpj: "123.456.789-00", address: { street: "Rua X" } },
   },
@@ -32,6 +35,8 @@ const subscriptionInactivated = {
     status: "INACTIVE",
     nextDueDate: "2026-11-04",
     customerEmail: "beatriz@exemplo.com",
+    externalReference: "00000000-0000-0000-0000-000000000002",
+    cycle: "MONTHLY",
     customer: "cus_222",
     dateUpdated: "2026-10-04T12:00:00Z",
   },
@@ -45,6 +50,7 @@ test("extrai campos necessarios de PAYMENT_CONFIRMED", () => {
   assert.equal(e.providerRef, "payment:pay_abc123");
   assert.equal(e.email, "ana@exemplo.com");
   assert.equal(e.subscriptionId, "sub_xyz789");
+  assert.equal(e.externalReference, "00000000-0000-0000-0000-000000000001");
   // periodEnd = dueDate (2026-11-04) + 7 days = 2026-11-11
   assert.ok(e.periodEnd?.startsWith("2026-11-11"), `periodEnd inesperado: ${e.periodEnd}`);
 });
@@ -55,6 +61,8 @@ test("extrai campos necessarios de SUBSCRIPTION_INACTIVATED", () => {
   assert.equal(e.eventType, "SUBSCRIPTION_INACTIVATED");
   assert.equal(e.providerRef, "subscription:sub_xyz789");
   assert.equal(e.email, "beatriz@exemplo.com");
+  assert.equal(e.externalReference, "00000000-0000-0000-0000-000000000002");
+  assert.equal(e.billingCycle, "MONTHLY");
   assert.equal(e.subscriptionId, "sub_xyz789");
   assert.ok(e.periodEnd?.startsWith("2026-11-11"), `periodEnd inesperado: ${e.periodEnd}`);
 });
@@ -117,4 +125,35 @@ test("toIso interpreta datas da Asaas", () => {
   assert.equal(toIso("lixo"), null);
   assert.equal(toIso(""), null);
   assert.equal(toIso(null), null);
+});
+
+test("externalReference ausente resulta em null", () => {
+  const semRef = structuredClone(paymentConfirmed) as Record<string, unknown>;
+  delete (semRef.payment as Record<string, unknown>).externalReference;
+  const e = parseAsaasPayload(semRef);
+  assert.ok(e);
+  assert.equal(e.externalReference, null);
+});
+
+test("mapPlano retorna o plano correto para cada ciclo", () => {
+  assert.equal(mapPlano("MONTHLY"), "mensal");
+  assert.equal(mapPlano("WEEKLY"), "mensal");
+  assert.equal(mapPlano("BIMONTHLY"), "mensal");
+  assert.equal(mapPlano("QUARTERLY"), "trimestral");
+  assert.equal(mapPlano("SEMIANNUAL"), "anual");
+  assert.equal(mapPlano("YEARLY"), "anual");
+  assert.equal(mapPlano(null), "mensal");
+  assert.equal(mapPlano(""), "mensal");
+  assert.equal(mapPlano("monthly"), "mensal"); // case insensitive
+});
+
+test("mapStatusAssinante retorna o status correto", () => {
+  assert.equal(mapStatusAssinante("PAYMENT_CONFIRMED"), "ativo");
+  assert.equal(mapStatusAssinante("PAYMENT_RECEIVED"), "ativo");
+  assert.equal(mapStatusAssinante("PAYMENT_OVERDUE"), "suspenso");
+  assert.equal(mapStatusAssinante("PAYMENT_DELETED"), "cancelado");
+  assert.equal(mapStatusAssinante("SUBSCRIPTION_DELETED"), "cancelado");
+  assert.equal(mapStatusAssinante("SUBSCRIPTION_INACTIVATED"), "cancelado");
+  assert.equal(mapStatusAssinante("PAYMENT_REFUNDED"), null);
+  assert.equal(mapStatusAssinante("PAYMENT_CHARGEBACK_REQUESTED"), null);
 });
