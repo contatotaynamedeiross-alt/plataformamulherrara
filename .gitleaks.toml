@@ -21,4 +21,12 @@ regexes = [
   '''sha512-[A-Za-z0-9+/=]{80,}''',
   # URLs de sessão do Claude Code na atribuição de commits
   '''claude\.ai/code/session_[A-Za-z0-9]+''',
+  # Placeholders de JWT no .env.example (não são segredos reais)
+  '''eyJ\.\.\.|SUPABASE_ANON_KEY=eyJ[A-Za-z0-9._-]+''',
+]
+
+[allowlist.commits]
+commits = [
+  # Commit inicial com .env.example contendo placeholders eyJ...
+  "8a57ec5",
 ]
