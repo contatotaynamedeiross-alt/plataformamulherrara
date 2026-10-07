@@ -22,7 +22,7 @@ end $$;
 set role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}', false);
 do $$ begin
-  perform public.apply_greenn_event(repeat('a',64), 'contract', 'paid', 'c1', 'ana@exemplo.com', null, now(), '{}');
+  perform public.apply_payment_event(repeat('a',64), 'contract', 'paid', 'c1', 'ana@exemplo.com', null, now(), '{}');
   raise exception 'FALHA: usuaria conseguiu chamar o webhook';
 exception when insufficient_privilege then null;
 end $$;
@@ -54,26 +54,26 @@ set role service_role;
 do $$
 declare r jsonb;
 begin
-  r := public.apply_greenn_event(repeat('1',64), 'contract', 'paid', 'contrato-ana', 'ANA@exemplo.com',
+  r := public.apply_payment_event(repeat('1',64), 'contract', 'paid', 'contrato-ana', 'ANA@exemplo.com',
                                  now() + interval '30 days', '2026-10-04 10:00+00', '{"type":"contract"}');
   assert r->>'outcome' = 'applied', 'evento deveria ser aplicado: ' || r::text;
   assert (r->>'needs_invite')::boolean = false, 'ana ja tem conta, nao precisa convite';
 
-  r := public.apply_greenn_event(repeat('1',64), 'contract', 'paid', 'contrato-ana', 'ana@exemplo.com', null, now(), '{}');
+  r := public.apply_payment_event(repeat('1',64), 'contract', 'paid', 'contrato-ana', 'ana@exemplo.com', null, now(), '{}');
   assert r->>'outcome' = 'duplicate', 'evento repetido deveria ser ignorado';
 
-  r := public.apply_greenn_event(repeat('2',64), 'contract', 'canceled', 'contrato-ana', 'ana@exemplo.com',
+  r := public.apply_payment_event(repeat('2',64), 'contract', 'canceled', 'contrato-ana', 'ana@exemplo.com',
                                  null, '2026-10-01 10:00+00', '{}');
   assert r->>'outcome' = 'ignored_stale', 'evento antigo nao pode cancelar assinatura nova';
 
-  r := public.apply_greenn_event(repeat('3',64), 'contract', 'paid', 'contrato-nova', 'nova@exemplo.com',
+  r := public.apply_payment_event(repeat('3',64), 'contract', 'paid', 'contrato-nova', 'nova@exemplo.com',
                                  null, now(), '{}');
   assert (r->>'needs_invite')::boolean, 'compradora sem conta precisa de convite';
 
-  r := public.apply_greenn_event(repeat('4',64), 'sale', 'waiting_payment', 'venda-x', 'ana@exemplo.com', null, now(), '{}');
+  r := public.apply_payment_event(repeat('4',64), 'sale', 'waiting_payment', 'venda-x', 'ana@exemplo.com', null, now(), '{}');
   assert r->>'outcome' = 'ignored_status', 'status sem efeito deve ser ignorado';
 
-  r := public.apply_greenn_event(repeat('5',64), 'contract', 'paid', 'contrato-bia', 'bia@exemplo.com', null, now(), '{}');
+  r := public.apply_payment_event(repeat('5',64), 'contract', 'paid', 'contrato-bia', 'bia@exemplo.com', null, now(), '{}');
   assert r->>'outcome' = 'applied';
 end $$;
 reset role;
@@ -232,7 +232,7 @@ reset role;
 -- Assinatura cancelada bloqueia; carência de 3 dias para inadimplência
 -- ---------------------------------------------------------------------
 set role service_role;
-select public.apply_greenn_event(repeat('6',64), 'contract', 'canceled', 'contrato-ana', 'ana@exemplo.com', null, now() + interval '1 minute', '{}');
+select public.apply_payment_event(repeat('6',64), 'contract', 'canceled', 'contrato-ana', 'ana@exemplo.com', null, now() + interval '1 minute', '{}');
 reset role;
 
 set role authenticated;
@@ -245,7 +245,7 @@ end $$;
 reset role;
 
 set role service_role;
-select public.apply_greenn_event(repeat('7',64), 'contract', 'unpaid', 'contrato-bia', 'bia@exemplo.com', null, now() + interval '1 minute', '{}');
+select public.apply_payment_event(repeat('7',64), 'contract', 'unpaid', 'contrato-bia', 'bia@exemplo.com', null, now() + interval '1 minute', '{}');
 reset role;
 do $$ begin
   assert private.has_active_access('00000000-0000-0000-0000-00000000000b'), 'inadimplente recente mantem carencia';
