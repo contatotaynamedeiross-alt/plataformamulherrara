@@ -270,6 +270,72 @@ do $$ begin
   assert (select count(*) from public.subscriptions where provider_ref = 'contrato-ana' and user_id is null) = 1;
 end $$;
 
+-- ---------------------------------------------------------------------
+-- Sprint 1 · Diagnóstico: isolamento e restrições
+-- ---------------------------------------------------------------------
+
+-- Anon não lê perguntas
+set role anon;
+do $$ begin
+  perform 1 from public.diagnostico_perguntas;
+  raise exception 'FALHA: anonimo leu perguntas do diagnostico';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Autenticada lê perguntas
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  assert (select count(*) from public.diagnostico_perguntas) = 15, 'deve haver 15 perguntas';
+end $$;
+
+-- Autenticada não pode inserir resposta por outra usuária
+do $$ begin
+  insert into public.diagnostico_respostas (user_id, pergunta_id, pontos)
+  values ('00000000-0000-0000-0000-00000000000a', 1, 3);
+  raise exception 'FALHA: resposta em nome de outra usuaria';
+exception when insufficient_privilege then null;
+end $$;
+
+-- Autenticada não pode chamar salvar_diagnostico diretamente
+do $$ begin
+  perform public.salvar_diagnostico(
+    '00000000-0000-0000-0000-00000000000b'::uuid,
+    3::smallint, 3::smallint, 3::smallint, 3::smallint, 3::smallint
+  );
+  raise exception 'FALHA: usuaria chamou salvar_diagnostico';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- service_role salva e isola corretamente
+set role service_role;
+do $$
+declare res jsonb;
+begin
+  -- insere respostas da Bia
+  insert into public.diagnostico_respostas (user_id, pergunta_id, pontos)
+  select '00000000-0000-0000-0000-00000000000b', id, 2 from public.diagnostico_perguntas;
+
+  res := public.salvar_diagnostico(
+    '00000000-0000-0000-0000-00000000000b'::uuid,
+    6::smallint, 6::smallint, 6::smallint, 6::smallint, 6::smallint
+  );
+  assert res->>'nivel' = 'Avançada', 'nivel esperado Avancada: ' || res::text;
+  assert (res->>'total')::int = 30, 'total esperado 30: ' || res::text;
+end $$;
+reset role;
+
+-- Bia vê só as próprias respostas
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  assert (select count(*) from public.diagnostico_respostas) = 15, 'bia deve ver 15 respostas proprias';
+  assert (select count(*) from public.diagnostico_resultado) = 1,  'bia deve ver 1 resultado proprio';
+end $$;
+reset role;
+
 -- Nenhuma tabela do schema public sem RLS
 do $$
 declare t text;
