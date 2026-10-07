@@ -9,6 +9,10 @@ useDefault = true
 
 [allowlist]
 description = "Falsos positivos conhecidos"
+commits = [
+  # Commit inicial com .env.example contendo strings eyJ* de exemplo (não são segredos reais)
+  "8a57ec5",
+]
 paths = [
   # Hashes de integridade em arquivos de lock não são segredos
   "deno.lock",

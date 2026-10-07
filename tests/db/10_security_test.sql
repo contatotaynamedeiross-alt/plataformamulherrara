@@ -477,4 +477,66 @@ begin
   assert f is null, 'funcoes sem search_path: ' || f;
 end $$;
 
+-- =====================================================================
+-- Sprint 4 · Mentoras de IA — testes de segurança
+-- =====================================================================
+
+-- Anônimo não pode ler mentora_uso
+set role anon;
+select set_config('request.jwt.claims', '', false);
+do $$ begin
+  perform 1 from public.mentora_uso;
+  raise exception 'FALHA: anonimo leu mentora_uso';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Authenticated não pode fazer INSERT direto em mentora_uso
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}', false);
+do $$ begin
+  insert into public.mentora_uso (user_id, data, contagem)
+  values ('00000000-0000-0000-0000-00000000000a', current_date, 1);
+  raise exception 'FALHA: authenticated conseguiu inserir em mentora_uso';
+exception when insufficient_privilege then null;
+end $$;
+
+-- Authenticated não pode chamar incrementar_uso_mentora diretamente
+do $$ begin
+  perform public.incrementar_uso_mentora('00000000-0000-0000-0000-00000000000a', current_date);
+  raise exception 'FALHA: authenticated conseguiu chamar incrementar_uso_mentora';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Isolamento: authenticated só vê sua própria linha
+set role service_role;
+do $$ begin
+  perform public.incrementar_uso_mentora('00000000-0000-0000-0000-00000000000a', current_date);
+  perform public.incrementar_uso_mentora('00000000-0000-0000-0000-00000000000b', current_date);
+end $$;
+reset role;
+
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}', false);
+do $$
+declare cnt integer;
+begin
+  select count(*) into cnt from public.mentora_uso;
+  assert cnt = 1, 'authenticated deveria ver apenas a propria linha, viu: ' || cnt;
+end $$;
+reset role;
+
+-- service_role pode incrementar e o contador aumenta
+set role service_role;
+do $$
+declare v integer;
+begin
+  perform public.incrementar_uso_mentora('00000000-0000-0000-0000-00000000000a', current_date);
+  select contagem into v from public.mentora_uso
+   where user_id = '00000000-0000-0000-0000-00000000000a' and data = current_date;
+  assert v = 2, 'contagem deveria ser 2, é: ' || v;
+end $$;
+reset role;
+
 \echo 'OK: todos os testes de seguranca do banco passaram'
