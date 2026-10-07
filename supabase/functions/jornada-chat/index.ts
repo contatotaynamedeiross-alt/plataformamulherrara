@@ -100,6 +100,7 @@ Deno.serve(async (req) => {
     .limit(10);
 
   const messages = [
+    { role: 'system' as const,    content: getSystemPrompt(sessao.pilar) },
     ...(historico ?? []).map((m: { role: string; conteudo: string }) => ({
       role: m.role as 'user' | 'assistant',
       content: m.conteudo,
@@ -107,40 +108,39 @@ Deno.serve(async (req) => {
     { role: 'user' as const, content: mensagem },
   ];
 
-  // Chama a API do Claude
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
+  // Chama a API via OpenRouter
+  const apiKey = Deno.env.get('OPENROUTER_API_KEY');
   if (!apiKey) {
-    console.error('ANTHROPIC_API_KEY não configurada');
+    console.error('OPENROUTER_API_KEY não configurada');
     return new Response(JSON.stringify({ error: 'configuracao_incompleta' }), {
       status: 500, headers: { ...cors, 'Content-Type': 'application/json' },
     });
   }
 
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+  const aiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'x-api-key':          apiKey,
-      'anthropic-version':  '2023-06-01',
-      'content-type':       'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer':  'https://app.raraia.com.br',
+      'Content-Type':  'application/json',
     },
     body: JSON.stringify({
-      model:      'claude-haiku-4-5-20251001',
+      model:      'meta-llama/llama-3.1-8b-instruct:free',
       max_tokens: 1024,
-      system:     getSystemPrompt(sessao.pilar),
       messages,
     }),
   });
 
-  if (!claudeRes.ok) {
-    const detail = await claudeRes.text();
-    console.error('erro claude api', claudeRes.status, detail);
+  if (!aiRes.ok) {
+    const detail = await aiRes.text();
+    console.error('erro openrouter', aiRes.status, detail);
     return new Response(JSON.stringify({ error: 'ai_error' }), {
       status: 502, headers: { ...cors, 'Content-Type': 'application/json' },
     });
   }
 
-  const claudeData = await claudeRes.json();
-  const resposta: string = claudeData.content?.[0]?.text ?? '';
+  const aiData = await aiRes.json();
+  const resposta: string = aiData.choices?.[0]?.message?.content ?? '';
 
   // Persiste mensagem da usuária e resposta do assistente
   const { error: errMsg } = await admin
