@@ -31,7 +31,8 @@ jobs:
           supabase secrets set \
             ASAAS_WEBHOOK_TOKEN="${{ secrets.ASAAS_WEBHOOK_TOKEN }}" \
             APP_URL="${{ vars.APP_URL }}" \
-            ALLOWED_ORIGINS="${{ vars.ALLOWED_ORIGINS }}"
+            ALLOWED_ORIGINS="${{ vars.ALLOWED_ORIGINS }}" \
+            ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}"
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
@@ -53,6 +54,11 @@ jobs:
 
       - name: Deploy função calcular-diagnostico
         run: supabase functions deploy calcular-diagnostico
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Deploy função jornada-chat
+        run: supabase functions deploy jornada-chat
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 

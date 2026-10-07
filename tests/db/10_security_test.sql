@@ -336,6 +336,80 @@ do $$ begin
 end $$;
 reset role;
 
+-- ---------------------------------------------------------------------
+-- Sprint 2 · Jornada: isolamento e restrições
+-- ---------------------------------------------------------------------
+
+-- Anon não lê sessões, mensagens nem entregas
+set role anon;
+do $$ begin
+  perform 1 from public.jornada_sessoes;
+  raise exception 'FALHA: anonimo leu sessoes da jornada';
+exception when insufficient_privilege then null;
+end $$;
+do $$ begin
+  perform 1 from public.jornada_mensagens;
+  raise exception 'FALHA: anonimo leu mensagens da jornada';
+exception when insufficient_privilege then null;
+end $$;
+do $$ begin
+  perform 1 from public.jornada_entregas;
+  raise exception 'FALHA: anonimo leu entregas da jornada';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Bia cria sessão e vê só a dela
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+
+insert into public.jornada_sessoes (user_id, pilar, status)
+values ('00000000-0000-0000-0000-00000000000b', 'identidade', 'ativa');
+
+do $$ begin
+  assert (select count(*) from public.jornada_sessoes) = 1, 'bia deve ver apenas 1 sessao propria';
+end $$;
+
+-- Bia não pode criar sessão em nome de outra usuária
+do $$ begin
+  insert into public.jornada_sessoes (user_id, pilar, status)
+  values ('00000000-0000-0000-0000-00000000000c', 'produto', 'ativa');
+  raise exception 'FALHA: sessao em nome de outra usuaria';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- service_role persiste mensagens e entregas sem restrição
+set role service_role;
+do $$
+declare sid uuid;
+begin
+  select id into sid from public.jornada_sessoes
+  where user_id = '00000000-0000-0000-0000-00000000000b' limit 1;
+
+  insert into public.jornada_mensagens (sessao_id, role, conteudo) values
+    (sid, 'user',      'Quero descobrir meu propósito'),
+    (sid, 'assistant', 'Ótimo! O que te fez chegar até aqui?');
+
+  insert into public.jornada_entregas (sessao_id, tipo, conteudo) values
+    (sid, 'proposta_valor', '{"texto":"Ajudo mulheres a se posicionarem"}'::jsonb);
+
+  assert (select count(*) from public.jornada_mensagens where sessao_id = sid) = 2,
+    'deve haver 2 mensagens';
+  assert (select count(*) from public.jornada_entregas where sessao_id = sid) = 1,
+    'deve haver 1 entrega';
+end $$;
+reset role;
+
+-- Bia lê mensagens e entregas das próprias sessões
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  assert (select count(*) from public.jornada_mensagens) = 2, 'bia deve ver 2 mensagens proprias';
+  assert (select count(*) from public.jornada_entregas)  = 1, 'bia deve ver 1 entrega propria';
+end $$;
+reset role;
+
 -- Nenhuma tabela do schema public sem RLS
 do $$
 declare t text;
