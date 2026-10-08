@@ -3,27 +3,30 @@ import { supabase } from "../lib/supabase";
 import Chat, { type Msg } from "../components/Chat";
 
 const PILARES = [
-  { id: "identidade", label: "Identidade" },
+  { id: "identidade",     label: "Identidade" },
   { id: "posicionamento", label: "Posicionamento" },
-  { id: "produto", label: "Produto" },
-  { id: "marketing_vendas", label: "Marketing" },
-  { id: "marca_pessoal", label: "Marca" },
+  { id: "produto",        label: "Produto" },
+  { id: "marketing",      label: "Marketing" },
+  { id: "marca",          label: "Marca" },
 ] as const;
 
 type PilarId = (typeof PILARES)[number]["id"];
 
 const BOAS_VINDAS: Record<PilarId, string> = {
-  identidade: "Olá. Estou aqui para explorar com você quem você é e o que te move. Como posso ajudar hoje?",
+  identidade:     "Olá. Estou aqui para explorar com você quem você é e o que te move. Como posso ajudar hoje?",
   posicionamento: "Vamos afinar seu posicionamento. O que você quer que as pessoas lembrem de você? Me conte.",
-  produto: "Produto é clareza. Vamos trabalhar o que você entrega e para quem. Por onde começamos?",
-  marketing_vendas: "Marketing é a arte de ser encontrada por quem precisa de você. O que está travando suas vendas?",
-  marca_pessoal: "Sua marca pessoal é a soma de como você aparece para o mundo. Vamos construir isso juntas?",
+  produto:        "Produto é clareza. Vamos trabalhar o que você entrega e para quem. Por onde começamos?",
+  marketing:      "Marketing é a arte de ser encontrada por quem precisa de você. O que está travando suas vendas?",
+  marca:          "Sua marca pessoal é a soma de como você aparece para o mundo. Vamos construir isso juntas?",
 };
 
 export default function Jornada() {
   const [pilar, setPilar] = useState<PilarId>("identidade");
   const [historico, setHistorico] = useState<Record<PilarId, Msg[]>>(
     Object.fromEntries(PILARES.map((p) => [p.id, [{ role: "assistant" as const, content: BOAS_VINDAS[p.id] }]])) as Record<PilarId, Msg[]>
+  );
+  const [sessoes, setSessoes] = useState<Record<PilarId, string | null>>(
+    Object.fromEntries(PILARES.map((p) => [p.id, null])) as Record<PilarId, string | null>
   );
   const [sending, setSending] = useState(false);
   const [erro, setErro] = useState("");
@@ -36,8 +39,31 @@ export default function Jornada() {
     setHistorico((h) => ({ ...h, [pilar]: [...h[pilar], newMsg] }));
     setSending(true);
 
+    let sessaoId = sessoes[pilar];
+    if (!sessaoId) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setSending(false);
+        setErro("Sessão expirada. Faça login novamente.");
+        return;
+      }
+      const { data: sessao, error: errSessao } = await supabase
+        .from("jornada_sessoes")
+        .insert({ user_id: user.id, pilar })
+        .select("id")
+        .single();
+
+      if (errSessao || !sessao) {
+        setSending(false);
+        setErro("Não foi possível iniciar a sessão. Tente novamente.");
+        return;
+      }
+      sessaoId = sessao.id as string;
+      setSessoes((s) => ({ ...s, [pilar]: sessaoId as string }));
+    }
+
     const { data, error } = await supabase.functions.invoke("jornada-chat", {
-      body: { pilar, mensagem: text },
+      body: { sessao_id: sessaoId, mensagem: text },
     });
 
     setSending(false);
