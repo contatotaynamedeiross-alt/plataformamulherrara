@@ -22,7 +22,7 @@ end $$;
 set role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}', false);
 do $$ begin
-  perform public.apply_greenn_event(repeat('a',64), 'contract', 'paid', 'c1', 'ana@exemplo.com', null, now(), '{}');
+  perform public.apply_payment_event(repeat('a',64), 'contract', 'paid', 'c1', 'ana@exemplo.com', null, now(), '{}');
   raise exception 'FALHA: usuaria conseguiu chamar o webhook';
 exception when insufficient_privilege then null;
 end $$;
@@ -54,26 +54,26 @@ set role service_role;
 do $$
 declare r jsonb;
 begin
-  r := public.apply_greenn_event(repeat('1',64), 'contract', 'paid', 'contrato-ana', 'ANA@exemplo.com',
+  r := public.apply_payment_event(repeat('1',64), 'contract', 'paid', 'contrato-ana', 'ANA@exemplo.com',
                                  now() + interval '30 days', '2026-10-04 10:00+00', '{"type":"contract"}');
   assert r->>'outcome' = 'applied', 'evento deveria ser aplicado: ' || r::text;
   assert (r->>'needs_invite')::boolean = false, 'ana ja tem conta, nao precisa convite';
 
-  r := public.apply_greenn_event(repeat('1',64), 'contract', 'paid', 'contrato-ana', 'ana@exemplo.com', null, now(), '{}');
+  r := public.apply_payment_event(repeat('1',64), 'contract', 'paid', 'contrato-ana', 'ana@exemplo.com', null, now(), '{}');
   assert r->>'outcome' = 'duplicate', 'evento repetido deveria ser ignorado';
 
-  r := public.apply_greenn_event(repeat('2',64), 'contract', 'canceled', 'contrato-ana', 'ana@exemplo.com',
+  r := public.apply_payment_event(repeat('2',64), 'contract', 'canceled', 'contrato-ana', 'ana@exemplo.com',
                                  null, '2026-10-01 10:00+00', '{}');
   assert r->>'outcome' = 'ignored_stale', 'evento antigo nao pode cancelar assinatura nova';
 
-  r := public.apply_greenn_event(repeat('3',64), 'contract', 'paid', 'contrato-nova', 'nova@exemplo.com',
+  r := public.apply_payment_event(repeat('3',64), 'contract', 'paid', 'contrato-nova', 'nova@exemplo.com',
                                  null, now(), '{}');
   assert (r->>'needs_invite')::boolean, 'compradora sem conta precisa de convite';
 
-  r := public.apply_greenn_event(repeat('4',64), 'sale', 'waiting_payment', 'venda-x', 'ana@exemplo.com', null, now(), '{}');
+  r := public.apply_payment_event(repeat('4',64), 'sale', 'waiting_payment', 'venda-x', 'ana@exemplo.com', null, now(), '{}');
   assert r->>'outcome' = 'ignored_status', 'status sem efeito deve ser ignorado';
 
-  r := public.apply_greenn_event(repeat('5',64), 'contract', 'paid', 'contrato-bia', 'bia@exemplo.com', null, now(), '{}');
+  r := public.apply_payment_event(repeat('5',64), 'contract', 'paid', 'contrato-bia', 'bia@exemplo.com', null, now(), '{}');
   assert r->>'outcome' = 'applied';
 end $$;
 reset role;
@@ -232,7 +232,7 @@ reset role;
 -- Assinatura cancelada bloqueia; carência de 3 dias para inadimplência
 -- ---------------------------------------------------------------------
 set role service_role;
-select public.apply_greenn_event(repeat('6',64), 'contract', 'canceled', 'contrato-ana', 'ana@exemplo.com', null, now() + interval '1 minute', '{}');
+select public.apply_payment_event(repeat('6',64), 'contract', 'canceled', 'contrato-ana', 'ana@exemplo.com', null, now() + interval '1 minute', '{}');
 reset role;
 
 set role authenticated;
@@ -245,7 +245,7 @@ end $$;
 reset role;
 
 set role service_role;
-select public.apply_greenn_event(repeat('7',64), 'contract', 'unpaid', 'contrato-bia', 'bia@exemplo.com', null, now() + interval '1 minute', '{}');
+select public.apply_payment_event(repeat('7',64), 'contract', 'unpaid', 'contrato-bia', 'bia@exemplo.com', null, now() + interval '1 minute', '{}');
 reset role;
 do $$ begin
   assert private.has_active_access('00000000-0000-0000-0000-00000000000b'), 'inadimplente recente mantem carencia';
@@ -269,6 +269,192 @@ do $$ begin
   assert (select count(*) from public.subscriptions where email like '%ana@%') = 0, 'email deve ser anonimizado';
   assert (select count(*) from public.subscriptions where provider_ref = 'contrato-ana' and user_id is null) = 1;
 end $$;
+
+-- ---------------------------------------------------------------------
+-- Sprint 1 · Diagnóstico: isolamento e restrições
+-- ---------------------------------------------------------------------
+
+-- Anon não lê perguntas
+set role anon;
+do $$ begin
+  perform 1 from public.diagnostico_perguntas;
+  raise exception 'FALHA: anonimo leu perguntas do diagnostico';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Autenticada lê perguntas
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  assert (select count(*) from public.diagnostico_perguntas) = 15, 'deve haver 15 perguntas';
+end $$;
+
+-- Autenticada não pode inserir resposta por outra usuária
+do $$ begin
+  insert into public.diagnostico_respostas (user_id, pergunta_id, pontos)
+  values ('00000000-0000-0000-0000-00000000000a', 1, 3);
+  raise exception 'FALHA: resposta em nome de outra usuaria';
+exception when insufficient_privilege then null;
+end $$;
+
+-- Autenticada não pode chamar salvar_diagnostico diretamente
+do $$ begin
+  perform public.salvar_diagnostico(
+    '00000000-0000-0000-0000-00000000000b'::uuid,
+    3::smallint, 3::smallint, 3::smallint, 3::smallint, 3::smallint
+  );
+  raise exception 'FALHA: usuaria chamou salvar_diagnostico';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- service_role salva e isola corretamente
+set role service_role;
+do $$
+declare res jsonb;
+begin
+  -- insere respostas da Bia
+  insert into public.diagnostico_respostas (user_id, pergunta_id, pontos)
+  select '00000000-0000-0000-0000-00000000000b', id, 2 from public.diagnostico_perguntas;
+
+  res := public.salvar_diagnostico(
+    '00000000-0000-0000-0000-00000000000b'::uuid,
+    6::smallint, 6::smallint, 6::smallint, 6::smallint, 6::smallint
+  );
+  assert res->>'nivel' = 'Avançada', 'nivel esperado Avancada: ' || res::text;
+  assert (res->>'total')::int = 30, 'total esperado 30: ' || res::text;
+end $$;
+reset role;
+
+-- Bia vê só as próprias respostas
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  assert (select count(*) from public.diagnostico_respostas) = 15, 'bia deve ver 15 respostas proprias';
+  assert (select count(*) from public.diagnostico_resultado) = 1,  'bia deve ver 1 resultado proprio';
+end $$;
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Sprint 2 · Jornada: isolamento e restrições
+-- ---------------------------------------------------------------------
+
+-- Anon não lê sessões, mensagens nem entregas
+set role anon;
+do $$ begin
+  perform 1 from public.jornada_sessoes;
+  raise exception 'FALHA: anonimo leu sessoes da jornada';
+exception when insufficient_privilege then null;
+end $$;
+do $$ begin
+  perform 1 from public.jornada_mensagens;
+  raise exception 'FALHA: anonimo leu mensagens da jornada';
+exception when insufficient_privilege then null;
+end $$;
+do $$ begin
+  perform 1 from public.jornada_entregas;
+  raise exception 'FALHA: anonimo leu entregas da jornada';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Bia cria sessão e vê só a dela
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+
+insert into public.jornada_sessoes (user_id, pilar, status)
+values ('00000000-0000-0000-0000-00000000000b', 'identidade', 'ativa');
+
+do $$ begin
+  assert (select count(*) from public.jornada_sessoes) = 1, 'bia deve ver apenas 1 sessao propria';
+end $$;
+
+-- Bia não pode criar sessão em nome de outra usuária
+do $$ begin
+  insert into public.jornada_sessoes (user_id, pilar, status)
+  values ('00000000-0000-0000-0000-00000000000c', 'produto', 'ativa');
+  raise exception 'FALHA: sessao em nome de outra usuaria';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- service_role persiste mensagens e entregas sem restrição
+set role service_role;
+do $$
+declare sid uuid;
+begin
+  select id into sid from public.jornada_sessoes
+  where user_id = '00000000-0000-0000-0000-00000000000b' limit 1;
+
+  insert into public.jornada_mensagens (sessao_id, role, conteudo) values
+    (sid, 'user',      'Quero descobrir meu propósito'),
+    (sid, 'assistant', 'Ótimo! O que te fez chegar até aqui?');
+
+  insert into public.jornada_entregas (sessao_id, tipo, conteudo) values
+    (sid, 'proposta_valor', '{"texto":"Ajudo mulheres a se posicionarem"}'::jsonb);
+
+  assert (select count(*) from public.jornada_mensagens where sessao_id = sid) = 2,
+    'deve haver 2 mensagens';
+  assert (select count(*) from public.jornada_entregas where sessao_id = sid) = 1,
+    'deve haver 1 entrega';
+end $$;
+reset role;
+
+-- Bia lê mensagens e entregas das próprias sessões
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  assert (select count(*) from public.jornada_mensagens) = 2, 'bia deve ver 2 mensagens proprias';
+  assert (select count(*) from public.jornada_entregas)  = 1, 'bia deve ver 1 entrega propria';
+end $$;
+reset role;
+
+-- ---------------------------------------------------------------------
+-- Sprint 3 · Assinantes: isolamento e restrições
+-- ---------------------------------------------------------------------
+
+-- Anon não lê assinantes
+set role anon;
+do $$ begin
+  perform 1 from public.assinantes;
+  raise exception 'FALHA: anonimo leu assinantes';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Autenticada não pode inserir diretamente
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  insert into public.assinantes (user_id, plano, status)
+  values ('00000000-0000-0000-0000-00000000000b', 'mensal', 'ativo');
+  raise exception 'FALHA: autenticada inseriu em assinantes diretamente';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- service_role insere e isolamento entre usuárias funciona
+set role service_role;
+insert into public.assinantes (user_id, plano, status)
+values ('00000000-0000-0000-0000-00000000000b', 'mensal', 'ativo');
+reset role;
+
+-- Bia vê apenas a própria assinatura
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', false);
+do $$ begin
+  assert (select count(*) from public.assinantes) = 1, 'bia deve ver 1 assinatura propria';
+end $$;
+reset role;
+
+-- Admin (sem assinatura cadastrada) não vê linha da Bia
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000c","role":"authenticated","app_metadata":{"role":"admin"}}', false);
+do $$ begin
+  assert (select count(*) from public.assinantes) = 0, 'FALHA: admin viu assinatura de outra usuaria';
+end $$;
+reset role;
 
 -- Nenhuma tabela do schema public sem RLS
 do $$
