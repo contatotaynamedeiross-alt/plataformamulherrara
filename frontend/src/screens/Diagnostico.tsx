@@ -3,9 +3,9 @@ import { supabase } from "../lib/supabase";
 
 interface Pergunta {
   id: number;
-  ordem: number;
-  texto: string;
-  pilar: string;
+  stage_id: number;
+  position: number;
+  statement: string;
 }
 
 interface Resultado {
@@ -40,9 +40,9 @@ export default function Diagnostico() {
 
   useEffect(() => {
     supabase
-      .from("diagnostico_perguntas")
+      .from("diagnostic_questions")
       .select("*")
-      .order("ordem")
+      .order("stage_id").order("position")
       .then(({ data, error }) => {
         if (!error && data) setPerguntas(data as Pergunta[]);
         setLoading(false);
@@ -135,7 +135,7 @@ export default function Diagnostico() {
               {i + 1} de {perguntas.length}
             </p>
             <p style={{ fontSize: 15, lineHeight: 1.6, color: "var(--chocolate)", marginBottom: 16 }}>
-              {p.texto}
+              {p.statement}
             </p>
             <div style={{ display: "flex", gap: 6 }}>
               {ESCALA.map((e) => (
