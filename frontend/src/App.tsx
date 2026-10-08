@@ -48,8 +48,8 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     supabase.functions.invoke("verificar-acesso")
-      .then(({ data, error }) => {
-        if (!error && data) {
+      .then(({ data }) => {
+        if (data) {
           setAcesso({
             tem_acesso: !!data.tem_acesso,
             plano: data.plano ?? null,
